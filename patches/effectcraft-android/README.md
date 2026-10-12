@@ -112,7 +112,7 @@ after its first frame` → `素材自检: test.mp4 H.264 25 fps … ／ 引擎�
 
 ## 5. 验证（本次实测）
 
-真机 **vivo PA2573 / Android 16**（`adb connect 192.168.0.106:37379`）与模拟器
+真机 **vivo PA2573 / Android 16**（`adb connect <device-ip>:37379`）与模拟器
 **emulator-5554**（Medium_Phone_API_36.0，无头 + SwiftShader）都装得上、起得来、无 panic：
 
 ```

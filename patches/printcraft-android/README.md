@@ -253,7 +253,7 @@ PrintCraft's own menus (it needs `egui::Order::Tooltip`), and the log tag defaul
 
 ### 7.2 Real device (vivo PA2573, Android 16, Mali-G925, Vulkan)
 
-`scripts/device-smoke.sh ai.storyteller.printcraft .MainActivity PrintCraft 192.168.0.106:37379 printcraft-real dist/PrintCraft-0.2.1-android-arm64.apk` installs, launches and screenshots:
+`scripts/device-smoke.sh ai.storyteller.printcraft .MainActivity PrintCraft <device-ip>:37379 printcraft-real dist/PrintCraft-0.2.1-android-arm64.apk` installs, launches and screenshots:
 
 ```
 I PrintCraft: printcraft-android: android_main entered (PdfCraft 0.2.1)

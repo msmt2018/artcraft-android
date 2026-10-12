@@ -19,3 +19,6 @@ target/
 **/build/
 local.properties
 .DS_Store
+
+# 日志文件不入库（emulator.log 曾泄露本机路径、用户名与 ADB 公钥）
+*.log

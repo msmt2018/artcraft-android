@@ -56,6 +56,16 @@ export ANDROID_NDK_HOME="__NDK__"
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21
 echo "[inner] PATH head: $(printf '%s' "$PATH" | cut -d: -f1-3)"
 echo "[inner] cc: $(command -v cc || echo NOT_FOUND)"
+# Strip the build machine's identity out of the shipped binary. Rust bakes absolute
+# panic-location paths into the object code, so without this every APK published from
+# this machine leaks /Users/<name>/.cargo/... to anyone who runs `strings libmain.so`
+# (measured: 632-1221 occurrences per APK). Remap to a neutral root.
+#
+# NOTE: `$HOME` is left for the inner shell to expand (it is always defined), but the clone
+# path must use the __CLONE__ placeholder -- the inner script runs with `set -u`, so an
+# unexpanded bare `$CLONE` there aborts the build with "unbound variable".
+export RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=__CLONE__=/src"
+echo "[inner] RUSTFLAGS: $RUSTFLAGS"
 exec cargo +stable ndk -t arm64-v8a -o "apps/__PKG__/jniLibs" build __PROFILE__ -p __PKG__
 INNER_EOF
 sed -i '' \

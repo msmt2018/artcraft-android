@@ -176,10 +176,10 @@ APK=~/artcraft-mobile/filmcraft/apps/filmcraft-android/android/app/build/outputs
 
 ```bash
 "$ADB" devices -l
-# TCP 形态：10.20.163.64:38657
-# mDNS 形态带空格/括号："adb-KZDQSSJZW4AURCJN-kXphPk (3)._adb-tls-connect._tcp"
-"$ADB" -s "10.20.163.64:38657" install -r "$APK"
-"$ADB" -s "10.20.163.64:38657" shell am start -n ai.storyteller.filmcraft/.MainActivity
+# TCP 形态：<device-ip>:38657
+# mDNS 形态带空格/括号："adb-<serial>-kXphPk (3)._adb-tls-connect._tcp"
+"$ADB" -s "<device-ip>:38657" install -r "$APK"
+"$ADB" -s "<device-ip>:38657" shell am start -n ai.storyteller.filmcraft/.MainActivity
 ```
 
 成功的样子（logcat）：`android_main entered` → `hardware decoding: Available("MediaCodec")` → `MediaCodec: decoding 320x240 H.264 with <设备解码器>` → `自检: … 解出 30 帧 … 回退 0` → `touch mode applied` → `loaded system CJK font`。构建验证通过后，把 APK 放进 `dist/`。
