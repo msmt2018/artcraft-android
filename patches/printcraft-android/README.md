@@ -10,7 +10,7 @@ Skrifa. There is **no PDFium, no C/C++ library and no native FFI to cross-compil
 platform code in this port is the Java picker bridge. The start-up self-test proves it on the
 device (see §6).
 
-## 1. The two things to copy in
+## 1. The things to copy in
 
 ```bash
 cd <printcraft-clone>
@@ -21,6 +21,25 @@ rsync -a ~/artcraft-mobile/patches/printcraft-android/ apps/printcraft-android/
 # 2. the UI-crate patch — REQUIRED, see §3
 patch -p1 < ~/artcraft-mobile/patches/printcraft-android/upstream/ui-egui.patch
 cp ~/artcraft-mobile/patches/printcraft-android/upstream/crates/ui-egui/src/fd.rs crates/ui-egui/src/fd.rs
+
+# 3. the OCR-crate patch — REQUIRED for a clean published binary, see §3.1
+patch -p1 < ~/artcraft-mobile/patches/printcraft-android/upstream/ocr.patch
+```
+
+### 3.1 Why the OCR patch exists
+
+`crates/ocr/src/lib.rs` builds a last-resort model-search path from
+`env!("CARGO_MANIFEST_DIR")`. Cargo injects that as an **env-var string**, not as a debug-info
+path, so `--remap-path-prefix` does **not** rewrite it: the published `.so` leaked
+`/Users/<builder>/artcraft-mobile/printcraft/crates/ocr` verbatim (a `strings libmain.so` shows
+it). One occurrence, but it is the builder's home directory.
+
+The patch gates that lookup to `#[cfg(not(target_os = "android"))]`. On Android it could never
+have succeeded anyway — an APK contains no source tree — so this is a correctness fix as much as
+a privacy one. With it applied the Android `.so` contains zero `/Users/` strings; verify with:
+
+```bash
+strings apps/printcraft-android/jniLibs/arm64-v8a/libmain.so | grep -c /Users/   # must print 0
 ```
 
 `apps/printcraft-android/android/` is the Gradle project; `apps/printcraft-android/jniLibs/` is

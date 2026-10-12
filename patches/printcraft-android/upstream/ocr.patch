@@ -1,0 +1,17 @@
+diff --git a/crates/ocr/src/lib.rs b/crates/ocr/src/lib.rs
+index f026f5b..8dc0f89 100644
+--- a/crates/ocr/src/lib.rs
++++ b/crates/ocr/src/lib.rs
+@@ -63,6 +63,12 @@ impl Models {
+             dirs.push(exe.join("models"));
+             dirs.push(exe.join("../Resources/models"));
+         }
++        // The source-tree fallback below is meaningless on Android -- an APK ships no source
++        // tree -- and `env!("CARGO_MANIFEST_DIR")` bakes the *builder's* absolute home directory
++        // into the shipped .so. `--remap-path-prefix` does not touch it, because cargo injects it
++        // as an env-var string rather than as a debug-info path. Gating it out on Android both
++        // removes the leak and drops a lookup that could never succeed there.
++        #[cfg(not(target_os = "android"))]
+         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models"));
+         dirs
+     }
