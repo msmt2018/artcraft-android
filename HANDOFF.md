@@ -244,3 +244,16 @@ APK=~/artcraft-mobile/filmcraft/apps/filmcraft-android/android/app/build/outputs
 | `filmcraft/AGENTS.md`、`filmcraft/docs/architecture.md`、`filmcraft/docs/control-protocol.md` | 上游规则、分层、各移植共用的命令/控制通道接口 |
 | `STORAGE.md` | 本机磁盘预算（哪些构建树可删） |
 | `dist/` | 发布 APK（本交接后创建） |
+
+## 附：EguiProbe APK 已撤回（2026-10-12，隐私原因）
+
+`dist/EguiProbe-1.0-android-arm64.apk` 已从仓库移除。它是 stage-3 的最小 eframe+wgpu 探针，
+已被 5 个真实应用取代，且它的二进制里嵌入了 446 处构建机绝对路径
+（`/Users/<name>/.cargo/registry/...`，来自 Rust 的 panic location 元数据）。
+
+如需重建证据，探针源码仍在 `probe/egui-android-probe/`，用同一套重映射构建即可：
+```bash
+export RUSTFLAGS="--remap-path-prefix=$HOME=/build"
+cargo +stable ndk -t arm64-v8a -o probe/egui-android-probe/app/src/main/jniLibs build --release -p egui-android-probe
+# 然后 strings <apk>/lib/arm64-v8a/libmain.so | grep -c /Users/  → 应为 0
+```
