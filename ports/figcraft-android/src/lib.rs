@@ -17,11 +17,12 @@
 #![cfg(target_os = "android")]
 
 mod saf;
+mod saf_services;
 
 use std::path::PathBuf;
 
 use figcraft_engine::Session;
-use figcraft_ui_egui::{FigApp, NoServices};
+use figcraft_ui_egui::FigApp;
 use winit::platform::android::activity::AndroidApp;
 
 /// How much to scale the desktop layout up on a phone.
@@ -63,7 +64,12 @@ fn android_main(app: AndroidApp) {
     }
 
     let mut session = Session::new();
-    let mut fa = FigApp::new(session, Box::new(NoServices));
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<figcraft_ui_egui::ControlRequest>();
+    let activity = app.activity_as_ptr() as usize;
+    let egui_ctx: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let services = saf_services::SafServices::new(activity, data_dir.clone(), std::sync::Arc::clone(&egui_ctx));
+    let mut fa = FigApp::new(session, Box::new(services));
     // Preferences live in the app's private directory; `load_prefs`/`save_prefs` mirror the
     // desktop's ui.json / prefs.json pair.
     if let Some(dir) = &data_dir {

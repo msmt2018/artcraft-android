@@ -694,3 +694,65 @@ ControlRequest::new("engine.execute", json!({
 `file.import_midi` / `file.export_*`，语义不同，要单独设计 |
 | FigCraft | ✅ | ❌ `Services` 是 trait 不是 struct |
 | GridCraft | ✅（老 app） | 见老 app 记录 |
+
+---
+
+## 第 55 轮：FigCraft 的 `SafServices`——异步 future 反而更适合 SAF
+
+### FigCraft 为什么不一样
+
+其他 app 的 `Services` 是 struct，`pick_open` 是同步闭包；FigCraft 是：
+
+```rust
+pub trait Services {
+    fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture { ... }
+}
+pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
+```
+
+`DialogFuture` 由 UI **跨帧轮询**（`figcraft_ui_egui` 里有个 `future` 字段）。
+这比同步闭包**更适合** SAF：不需要在帧内阻塞，也不需要「返回 None 再回灌」那套迂回。
+
+### 实现（`src/saf_services.rs`，115 行）
+
+```rust
+fn spawn_pick(&self) -> DialogFuture {
+    let (tx, rx) = mpsc::channel::<Option<PathBuf>>();
+    std::thread::spawn(move || {
+        let picked = saf::pick_media(activity, &dir, Duration::from_secs(300))
+            .into_iter().next().map(PathBuf::from);
+        let _ = tx.send(picked);
+        // 取消选择器不会产生输入事件，空闲的 app 就不会再 poll 了
+        if let Ok(g) = ctx.lock() { if let Some(c) = g.as_ref() { c.request_repaint(); } }
+    });
+    Box::pin(PickFuture { rx })
+}
+```
+
+`PickFuture::poll` 做 `try_recv()`：有值就 `Ready`，`Empty` 就 `Pending`，
+`Disconnected` 就 `Ready(None)`（线程没了当取消处理）。
+
+**关键点：`request_repaint()`**。用户取消选择器时不会有任何输入事件，
+一个空闲的 egui app 不会自动重绘，那个 future 就永远停在 `Pending` 了。
+所以后台线程拿到结果后必须主动唤醒。
+
+### 验证
+
+```
+grep -c SafServices   src/lib.rs         → 1
+grep -c saf::pick_media src/saf_services.rs → 1
+cargo +stable ndk check -p figcraft-android → 0 error
+```
+
+（这次特意先 grep 再报 —— 上一轮那个正则失配的教训。）
+
+### SAF 接线进度：10 / 13
+
+| app | 接线方式 |
+|---|---|
+| VectorCraft / DesignCraft / DeckCraft / CadCraft | 同步闭包 → 返回 None → `ControlRequest("app.open")` |
+| WordCraft | 同步闭包 → `ControlRequest("engine.execute", file.open)` |
+| **FigCraft** | **trait + `DialogFuture` + 后台线程 + `request_repaint`** |
+| FilmCraft / LightCraft / PhotoCraft / EffectCraft / PrintCraft | 老 app 已有 |
+| SoundCraft | ❌ 没有 `file.open`，DAW 语义不同 |
+| GridCraft | 老 app 记录 |
