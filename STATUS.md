@@ -1102,3 +1102,47 @@ package=artcraftlauncher
 「37 → 13」是对的，但里面有 1 个是错的、少了 1 个是对的，总数掩盖了两者的抵消。
 
 更稳的做法：先把候选项写到文件里，人工扫一遍，再执行删除。
+
+---
+
+## 第 63 轮：SAF 端到端验证受阻于模拟器的软件渲染
+
+想在模拟器上点一次「打开」把 SAF 整条链路跑通，结果失败在更前面的一步：
+
+```
+VectorCraft  pid 6386（存活）
+截图        15 KB，纯黑
+```
+
+日志里能看到 wgpu 在模拟器上选到 SwiftShader（`device_type: Cpu`），和
+FigCraft 那次是同一个根因，只是表现不同 —— FigCraft 在 `create_window_surface`
+拿不到 surface 时 **panic**，VectorCraft 则是**画不出来**（黑屏，不报错）。
+
+所以模拟器上没法点「打开」按钮：**界面上没有按钮**。
+
+### 这台设备上能做与不能做的事
+
+| 操作 | 模拟器 | 真机 |
+|---|---|---|
+| 安装 APK | ✅ | ✅（需解锁） |
+| 进程启动 | ✅ | ✅ |
+| **界面渲染** | ❌ SwiftShader 画不出 wgpu 内容 | ✅ 之前 VectorCraft 在 Mali-G925 上正常 |
+| 点按钮 / 验证 SAF | ❌ | ✅（需解锁） |
+
+真机当时锁屏，vivo 拒绝安装（`INSTALL_FAILED_ABORTED: User rejected permissions`），
+所以这一步需要人工解锁后才能做。
+
+### 已有证据能证明什么、不能证明什么
+
+**能证明**（编译与静态验证）：
+- `saf.rs` 的六个 JNI 方法名与 `MainActivity.java` 实现完全对应
+- `MainActivity.java` 通过 `javac -proc:only` 检查（只缺 SDL/AndroidX 类，无语法错）
+- 7 个新 app 的 `services()` / `SafHost` 确实调用了 `saf::pick_media`（grep 计数 ≥1）
+- FilmCraft 重装后媒体自检真的跑通（`H.264 30/30 帧`）
+
+**不能证明**（需要真机手动点一次）：
+- 系统选择器真的弹出
+- 选中的文件真的被拷进 `filesDir/incoming/`
+- `safPublish` 真的写进了用户选的位置
+
+这个区分很重要：我不想把「JNI 方法都存在」说成「文件打开能用」。
