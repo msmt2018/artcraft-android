@@ -1002,3 +1002,55 @@ fn pick_save(&mut self, _title: &str, name: &str, _exts: &[&str]) -> DialogFutur
 | GridCraft / ArtCraft Launcher | ✅（老 app） | ⏳ 待查 |
 
 **7 个新移植的 app 双通路全部齐备。**
+
+---
+
+## 第 61 轮：SAF 全量核实 —— 结论比预期好，13/13 打开与保存都已实现
+
+### 之前的统计是错的
+
+前几轮我用 `grep <app>-android/src/lib.rs` 统计，得出的结论是
+「SAF 保存 8/13」，并据此以为 LightCraft / PhotoCraft / EffectCraft / PrintCraft
+还有 4 个要补。
+
+**实际上那 4 个早就有了**，只是代码不在 `lib.rs` 里：
+
+| app | 保存路径在哪 |
+|---|---|
+| FilmCraft | `src/lib.rs`（`spawn_publish`） |
+| LightCraft | `src/lib.rs`（`spawn_publish`） |
+| **PhotoCraft** | **`src/services.rs`**（`spawn_publish`，324 行的独立模块） |
+| EffectCraft | `src/lib.rs`（`spawn_publish`） |
+| **PrintCraft** | **`src/saf.rs`**（`SafHost::save()`，282 行） |
+
+尤其 PrintCraft，它的 SAF 结构是**第四种**：不是闭包、不是 `Services` 结构体、
+不是 trait 对象，而是给 UI crate 的 `fd::Host` trait 提供一个实现：
+
+```rust
+impl Host for SafHost {
+    fn open(&self, request: &DialogRequest, multiple: bool) -> Vec<PathBuf>;
+    fn save(&self, request: &DialogRequest) -> Option<PathBuf>;
+    fn folder(&self) -> Option<PathBuf>;
+}
+```
+
+### 教训
+
+**统计「某功能有没有实现」时，只搜主文件会漏掉模块化拆分的代码。**
+
+`lib.rs` 只是入口，实现可能在 `services.rs` / `saf.rs` / `saf_services.rs` 里。
+正确的搜法是 `grep -rl <模式> <src 目录>`，不是 `grep <模式> lib.rs`。
+
+这一轮差点又基于错误统计去「新增」一个已经存在的功能 —— 那样会写出重复的
+`spawn_publish`，编译能过，运行时两个线程抢同一个 scratch 文件。
+
+### 最终状态
+
+| 能力 | 进度 |
+|---|---|
+| APK 出包 | 13 / 13 |
+| SAF 打开 | **13 / 13** |
+| SAF 保存 | **13 / 13** |
+| 原版图标 | 13 / 13 |
+
+ArtCraft 的 SAF 工作**到此完整**。剩下的是 Blender 的原生侧。
