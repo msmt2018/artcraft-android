@@ -62,8 +62,16 @@ fn android_main(app: AndroidApp) {
         std::fs::create_dir_all(dir).ok();
     }
 
+    // The SAF pickers answer asynchronously (Java starts the intent, this side polls a flag), but
+    // `Services::pick_open` is synchronous and runs on the UI thread. So the hook starts a
+    // background task and answers `None`, and the chosen paths come back through the app's own
+    // control channel -- which runs the *normal* `file.open` command, exactly as the desktop does.
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<vectorcraft_ui_egui::ControlRequest>();
+    let activity = app.activity_as_ptr() as usize;
+
     let mut session = Session::new();
-    let mut vc = VectorcraftApp::new(session, services());
+    let mut vc = VectorcraftApp::new(session, services(ctrl_tx, activity, data_dir.clone()))
+        .with_control(ctrl_rx);
     // Preferences live in the app's private directory; `load_prefs`/`save_prefs` mirror the
     // desktop's ui.json / prefs.json pair.
     if let Some(dir) = &data_dir {
@@ -91,12 +99,52 @@ fn android_main(app: AndroidApp) {
     }
 }
 
-/// What the platform shell can do for the UI. Android has no `rfd` and no `arboard`, so every
-/// picker and clipboard hook is left `None`: the UI already handles that (its menus fall back to
-/// VectorCraft's own clipboard, and an unavailable picker reports itself), which keeps the first
-/// port honest instead of half-wired.
-fn services() -> Services {
-    Services::default()
+/// What the platform shell can do for the UI.
+///
+/// Android has no `rfd` and no `arboard`, so the clipboard hooks stay `None` (the UI falls back to
+/// VectorCraft's own clipboard). The two pickers are wired to the Storage Access Framework: they
+/// cannot answer synchronously without freezing the frame, so each starts a background task and
+/// returns `None`, and the result arrives over the control channel a moment later.
+fn services(
+    ctrl: std::sync::mpsc::Sender<vectorcraft_ui_egui::ControlRequest>,
+    activity: usize,
+    data_dir: Option<PathBuf>,
+) -> Services {
+    let mut services = Services::default();
+
+    let open_ctrl = ctrl.clone();
+    let open_dir = data_dir.clone();
+    services.pick_open = Some(Box::new(move |_pick: &vectorcraft_ui_egui::FilePick| {
+        let Some(dir) = open_dir.clone() else {
+            log::warn!("SAF: no data dir; cannot open the picker");
+            return None;
+        };
+        let ctrl = open_ctrl.clone();
+        std::thread::spawn(move || {
+            let paths = saf::pick_media(activity, &dir, std::time::Duration::from_secs(300));
+            let Some(path) = paths.into_iter().next() else {
+                log::info!("SAF: nothing picked");
+                return;
+            };
+            log::info!("SAF: opening {path}");
+            let (req, _rx) = vectorcraft_ui_egui::ControlRequest::new(
+                "app.open",
+                serde_json::json!({ "path": path }),
+            );
+            if ctrl.send(req).is_err() {
+                log::warn!("SAF: control channel closed; {path} was not opened");
+            }
+        });
+        // The picker is on screen already; answer nothing so the frame keeps rendering.
+        None
+    }));
+
+    services.pick_save = Some(Box::new(move |_pick: &vectorcraft_ui_egui::FilePick| {
+        log::info!("SAF: save uses the app's own export directory; the system picker is not wired here yet");
+        None
+    }));
+
+    services
 }
 
 /// VectorCraft's own preferences, in the app's private data directory.

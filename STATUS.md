@@ -529,3 +529,56 @@ FilmCraft 的解法是返回 `None` 立刻返回、后台线程跑完再把路�
 选完文件，然后什么都没发生。要做就做完整的那条回路。
 
 每个 app 的 `ControlRequest` 形状都不同，所以这是逐个的活，不是机械复制。
+
+---
+
+## 第 52 轮：SAF 第一次真正接线（VectorCraft 作为示范）
+
+前几轮把两半都补齐了（`saf.rs` + `MainActivity.java`），但 `services()` 一直是
+`Services::default()`，所以没有任何代码调用 `saf::pick_media`。这轮把回路接上了。
+
+### 接线的形状
+
+难点在于两边的时序不匹配：
+
+- `PickOpen = Box<dyn FnMut(&FilePick) -> Option<String>>` —— **同步**，在 UI 线程调用
+- SAF 选择器 —— **异步**（Java 起 Intent，Rust 侧每 250ms 轮询一次标志）
+
+如果 `pick_open` 里阻塞等选择器，整帧就冻住了。所以：
+
+```rust
+services.pick_open = Some(Box::new(move |_pick: &FilePick| {
+    let Some(dir) = open_dir.clone() else { return None };
+    let ctrl = open_ctrl.clone();
+    std::thread::spawn(move || {
+        let paths = saf::pick_media(activity, &dir, Duration::from_secs(300));
+        let Some(path) = paths.into_iter().next() else { return };
+        let (req, _rx) = ControlRequest::new("app.open", json!({ "path": path }));
+        let _ = ctrl.send(req);
+    });
+    None   // 选择器已经弹出去了，这一帧继续渲染
+}));
+```
+
+配套改动：
+1. `android_main` 里建 `mpsc::channel::<ControlRequest>()`
+2. `app.activity_as_ptr() as usize` 拿 Activity 指针（在 `app` 被 move 进
+   `NativeOptions` 之前）
+3. `VectorcraftApp::new(...).with_control(ctrl_rx)` —— app 每帧从通道里取请求执行
+4. 回灌的 `app.open` 走的是**桌面同款**命令（`control.rs` 里本就映射到
+   `file.open`），所以打开路径完全一致
+
+`cargo +stable ndk check` → **0 error**；APK 79.6 MB 重建、装机、启动（pid 6171）。
+
+### `pick_save` 故意没接
+
+保存走的是「应用自己的 export 目录 + SAF 发布」两段式（FilmCraft 的模型：
+先写到临时文件，`safPublish` 再搬到用户选的位置）。VectorCraft 的 export
+目录和临时文件流程我还没查清，所以 `pick_save` 只是记一条日志并返回 `None`，
+**没有假装能用**。
+
+### 其余 6 个 app
+
+接线模式完全一样，但每个 app 的 `ControlRequest` 方法名和 `Services` 字段
+需要各自确认（VectorCraft 是 `app.open` + `pick_open`）。逐个做，不批量 sed ——
+批量改跨语言回调是最容易留下静默失败的方式。
