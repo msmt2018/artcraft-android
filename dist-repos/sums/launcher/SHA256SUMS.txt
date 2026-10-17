@@ -1,0 +1,1 @@
+f3e3dc339ad37c02f03f063e53c0f07084ab1bb80a6bf5b47d46a49440283437  ArtCraftLauncher-0.4.1-android-arm64.apk
