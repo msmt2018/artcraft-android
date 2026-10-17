@@ -1111,8 +1111,13 @@ package=artcraftlauncher
 
 ```
 VectorCraft  pid 6386（存活）
-截图        15 KB，纯黑
+20 秒截图     15 KB，纯黑
+30 秒截图    256 KB —— 但不是 VectorCraft，是另一个 app「可达鸭 KedaYa」
+日志         Transition(type = CLOSE) → ActivityTaskManager: top resumed state loss timeout
 ```
+
+**VectorCraft 在模拟器上渲染不出来，然后自己关闭了**，前台落回上一个应用。
+第一次看到 256 KB 截图时我差点以为「只是截得太早」，实际上那是别人的界面。
 
 日志里能看到 wgpu 在模拟器上选到 SwiftShader（`device_type: Cpu`），和
 FigCraft 那次是同一个根因，只是表现不同 —— FigCraft 在 `create_window_surface`
@@ -1146,3 +1151,14 @@ FigCraft 那次是同一个根因，只是表现不同 —— FigCraft 在 `crea
 - `safPublish` 真的写进了用户选的位置
 
 这个区分很重要：我不想把「JNI 方法都存在」说成「文件打开能用」。
+
+### 一个差点报错的观察
+
+我先是看到「第二次截图 256 KB，不是黑屏！」，差点就写成「只是截得太早，
+其实渲染正常」。
+
+**实际上那 256 KB 是「可达鸭 KedaYa」的界面** —— VectorCraft 已经关闭，
+前台落回了上一个应用。
+
+这个坑很典型：**截图字节数只能说明「屏幕上有东西」，不能说明「那是我的东西」**。
+要判断某个 app 的界面，必须看图，不能看文件大小。
