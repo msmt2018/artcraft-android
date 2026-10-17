@@ -756,3 +756,67 @@ cargo +stable ndk check -p figcraft-android → 0 error
 | FilmCraft / LightCraft / PhotoCraft / EffectCraft / PrintCraft | 老 app 已有 |
 | SoundCraft | ❌ 没有 `file.open`，DAW 语义不同 |
 | GridCraft | 老 app 记录 |
+
+---
+
+## 第 56 轮：SoundCraft 接线完成 —— ArtCraft 全 13 个的 SAF 全部接通
+
+### SoundCraft 的「打开」是三件事，不是一件
+
+DAW 没有 `file.open`。看它的命令表：
+
+```
+session.new  session.open  session.close  session.revert
+session.save  session.save_as  session.save_copy
+file.import_audio  file.import_midi  file.bounce_mix ...
+```
+
+而 `Services::pick_open` 的签名里带着 `purpose`：
+
+```rust
+pub pick_open: Option<Box<dyn Fn(&str, &[&str]) -> Option<String>>>,
+```
+
+桌面端的实现按 `purpose` 分三种过滤器，所以 Android 端也就按它分派：
+
+| `purpose` | 命令 |
+|---|---|
+| `"session.open"` | `session.open`（`.scraft` 项目） |
+| `"file.import_midi"` | `file.import_midi` |
+| 其他（音频） | `file.import_audio` |
+
+三个命令都收 `{"path": ...}`，所以一条 `engine.execute` 回路就够。
+
+### 验证（这次先 grep 后看 error）
+
+```
+grep -c "saf::pick_media" src/lib.rs   → 1
+grep -c "SoundApp::new"    src/lib.rs   → 1
+grep -c "fn services"      src/lib.rs   → 1
+cargo +stable ndk check                → 0 error
+```
+
+（上一轮那个正则失配的坑：脚本「成功」了、文件没改、编译 0 error —— 全部假象。
+现在每次改完都先确认目标代码真的在。）
+
+### SAF 接线：13 / 13
+
+| app | 接线方式 |
+|---|---|
+| VectorCraft / DesignCraft / DeckCraft / CadCraft | 同步闭包 → `None` → `ControlRequest("app.open")` |
+| WordCraft | 同步闭包 → `ControlRequest("engine.execute", file.open)` |
+| FigCraft | trait + `DialogFuture` + 后台线程 + `request_repaint` |
+| **SoundCraft** | **同步闭包 → `engine.execute`，按 `purpose` 分派到 session.open / import_midi / import_audio** |
+| FilmCraft / LightCraft / PhotoCraft / EffectCraft / PrintCraft | 老 app 已有（用 `HostHooks` + `ControlRequest`） |
+| GridCraft / ArtCraft Launcher | 老 app 已有 |
+
+`MainActivity.java`（271 行）提供 Java 侧的 `ACTION_OPEN_DOCUMENT` /
+`ACTION_CREATE_DOCUMENT` / `takePersistableUriPermission` / `openOutputStream`。
+
+### 还剩什么
+
+**`pick_save` 全部是显式 no-op**（记一条日志、返回 `None`）。保存要用
+「写临时文件 → `safPublish` 搬到用户选的位置」的两段式（FilmCraft 是这么做的），
+每个 app 的 export 目录和临时文件流程都不一样，还没有逐个查清。
+宁可留一条明确的日志，也不返回一个假路径 —— 那样就会重现这次花了好几轮
+才消除的那种静默失败。

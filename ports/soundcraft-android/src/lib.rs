@@ -61,7 +61,17 @@ fn android_main(app: AndroidApp) {
         log::info!("soundcraft-android: data dir {}", dir.display());
         std::fs::create_dir_all(dir).ok();
     }
-    let mut vc = SoundApp::new(Engine::default(), None, Services::default());
+    // The SAF picker answers asynchronously, but `Services::pick_open` is synchronous and runs on
+    // the UI thread. So the hook starts a background task and answers `None`; the chosen path comes
+    // back over the control channel and runs the matching engine command.
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<soundcraft_ui_egui::ControlRequest>();
+    let activity = app.activity_as_ptr() as usize;
+    let mut vc = SoundApp::new(
+        Engine::default(),
+        None,
+        services(ctrl_tx, activity, data_dir.clone()),
+    )
+    .with_control(ctrl_rx);
     // Preferences live in the app's private directory; `load_prefs`/`save_prefs` mirror the
     // desktop's ui.json / prefs.json pair.
     if let Some(dir) = &data_dir {
@@ -223,4 +233,54 @@ fn append_cjk_fallback(ctx: &egui::Context) {
     }
     ctx.set_fonts(fonts);
     log::info!("soundcraft-android: CJK fallback appended from {path}");
+}
+
+/// What the platform shell can do for the UI.
+///
+/// SoundCraft has no `file.open`: a DAW opens a session (`session.open`) and otherwise imports
+/// material (`file.import_audio`, `file.import_midi`). `pick_open`'s `purpose` argument already
+/// carries which of the three the caller wants, so the background task maps it to the matching
+/// command. All three take `{"path": ...}`, so one round trip covers them.
+fn services(
+    ctrl: std::sync::mpsc::Sender<soundcraft_ui_egui::ControlRequest>,
+    activity: usize,
+    data_dir: Option<PathBuf>,
+) -> Services {
+    let open_ctrl = ctrl;
+    let open_dir = data_dir;
+    Services {
+        pick_open: Some(Box::new(move |purpose: &str, _exts: &[&str]| {
+            let command = match purpose {
+                "session.open" => "session.open",
+                "file.import_midi" => "file.import_midi",
+                _ => "file.import_audio",
+            };
+            let Some(dir) = open_dir.clone() else {
+                log::warn!("SAF: no data dir; cannot open the picker");
+                return None;
+            };
+            let ctrl = open_ctrl.clone();
+            std::thread::spawn(move || {
+                let paths = saf::pick_media(activity, &dir, std::time::Duration::from_secs(300));
+                let Some(path) = paths.into_iter().next() else {
+                    log::info!("SAF: nothing picked");
+                    return;
+                };
+                log::info!("SAF: {command} <- {path}");
+                let (req, _rx) = soundcraft_ui_egui::ControlRequest::new(
+                    "engine.execute",
+                    serde_json::json!({ "command": command, "params": { "path": path } }),
+                );
+                if ctrl.send(req).is_err() {
+                    log::warn!("SAF: control channel closed; {path} was not used");
+                }
+            });
+            None
+        })),
+        pick_save: Some(Box::new(move |_purpose: &str, _default: &str| {
+            log::info!("SAF: save still uses SoundCraft's own directory; the system picker is not wired here yet");
+            None
+        })),
+        pick_folder: None,
+    }
 }
