@@ -941,3 +941,64 @@ cargo +stable ndk check → 各 0 error
 
 剩：soundcraft（形状不同）、figcraft（trait + DialogFuture）、以及 5 个老 app
 （FilmCraft 已有，其余 4 个待查）。
+
+---
+
+## 第 59 轮：SoundCraft 与 FigCraft 的 `pick_save` 完成 —— 7 个新 app 双通路齐备
+
+### SoundCraft：形状问题，就地改结构体字面量
+
+它的三个 picker 是一起给的：
+
+```rust
+Services {
+    pick_open: Some(...),
+    pick_save: Some(...),   // ← 要在这里就地替换
+    pick_folder: None,
+}
+```
+
+不是 `services.pick_save = Some(...)` 赋值，所以上一轮的脚本找不到。
+另外需要在构造 `Services` 前加 `let save_dir = data_dir.clone();`（原来
+`data_dir` 被 `pick_open` 的闭包 move 掉了）。
+
+签名 `Fn(&str, &str) -> Option<String>` 的**第二个参数**是建议文件名。
+
+### FigCraft：`DialogFuture` 让保存更简单
+
+因为返回的是 future，可以**立刻 resolve** 成 scratch 路径让应用开始写，
+同时后台线程去问目的地并等文件写完再 publish：
+
+```rust
+fn pick_save(&mut self, _title: &str, name: &str, _exts: &[&str]) -> DialogFuture {
+    let scratch = export_dir.join(leaf);
+    std::thread::spawn(move || { /* pick_save → 等写完 → publish */ });
+    Box::pin(std::future::ready(Some(scratch)))   // 立即返回
+}
+```
+
+比同步闭包版本短，因为不需要「返回 None 再回灌」那套。
+
+### 验证
+
+| app | `saf::publish` | check |
+|---|---|---|
+| SoundCraft | 1 | 0 error |
+| FigCraft | 1 | 0 error |
+
+### SAF 完成度
+
+| app | 打开 | 保存 |
+|---|---|---|
+| VectorCraft | ✅ | ✅ |
+| DesignCraft | ✅ | ✅ |
+| DeckCraft | ✅ | ✅ |
+| CadCraft | ✅ | ✅ |
+| WordCraft | ✅ | ✅ |
+| SoundCraft | ✅ | ✅ |
+| FigCraft | ✅ | ✅ |
+| FilmCraft | ✅ | ✅（老 app） |
+| LightCraft / PhotoCraft / EffectCraft / PrintCraft | ✅（老 app 打开） | ⏳ 待查 |
+| GridCraft / ArtCraft Launcher | ✅（老 app） | ⏳ 待查 |
+
+**7 个新移植的 app 双通路全部齐备。**

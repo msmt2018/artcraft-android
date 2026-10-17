@@ -104,12 +104,63 @@ impl Services for SafServices {
         self.spawn_pick()
     }
 
-    fn pick_save(&mut self, _title: &str, _name: &str, _exts: &[&str]) -> DialogFuture {
-        // Saving goes through "write a scratch file, then publish it" the way FilmCraft does, and
-        // FigCraft's export flow has not been traced yet. Answering `None` is honest: the UI treats
-        // it as "no destination chosen" and keeps the file where it was. Faking a path here would
-        // put back the silent failure this whole exercise is removing.
-        log::info!("SAF: save is not wired for FigCraft yet; the file stays in the app directory");
-        Box::pin(std::future::ready(None))
+    fn pick_save(&mut self, _title: &str, name: &str, _exts: &[&str]) -> DialogFuture {
+        // Two-stage, like the other apps, but the future makes it simpler: it can resolve straight
+        // away with the scratch path so FigCraft starts writing, while a worker asks the user where
+        // the file should really go and copies it there once it has stopped growing.
+        let Some(dir) = self.data_dir.clone() else {
+            log::warn!("SAF: no data dir; cannot save");
+            return Box::pin(std::future::ready(None));
+        };
+        let leaf: String = {
+            let requested = if name.is_empty() { "export" } else { name };
+            requested
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("export")
+                .to_owned()
+        };
+        let export_dir = dir.join("export");
+        if std::fs::create_dir_all(&export_dir).is_err() {
+            log::warn!("SAF: could not create {}", export_dir.display());
+            return Box::pin(std::future::ready(None));
+        }
+        let scratch = export_dir.join(&leaf);
+        let scratch_string = scratch.to_string_lossy().into_owned();
+        log::info!("SAF: save dialog -> {scratch_string}");
+
+        let activity = self.activity;
+        let publish_path = scratch_string.clone();
+        let publish_leaf = leaf.clone();
+        std::thread::spawn(move || {
+            if !saf::pick_save(activity, &publish_leaf, std::time::Duration::from_secs(300)) {
+                log::info!("SAF: no destination chosen; the file stays at {publish_path}");
+                return;
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+            let (mut size, mut stable_since) = (0u64, std::time::Instant::now());
+            loop {
+                let now = std::fs::metadata(&publish_path).map(|m| m.len()).unwrap_or(0);
+                if now != size {
+                    size = now;
+                    stable_since = std::time::Instant::now();
+                } else if size > 0 && stable_since.elapsed() > std::time::Duration::from_millis(1500) {
+                    break;
+                }
+                if std::time::Instant::now() > deadline {
+                    log::warn!("SAF: giving up on {publish_path} (nothing was written)");
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            if saf::publish(activity, &publish_path) {
+                log::info!("SAF: published {publish_path} ({size} bytes)");
+            } else {
+                log::warn!("SAF: publishing {publish_path} failed; the file stays in the export directory");
+            }
+        });
+
+        Box::pin(std::future::ready(Some(scratch)))
     }
 }
