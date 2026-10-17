@@ -471,3 +471,61 @@ HEVC 在模拟器上硬件解码失败但正确回退到软件解码器 —— �
 **静默失败比崩溃难查得多。** 跨语言桥接的代码，必须逐项确认对端真的存在 ——
 `find . -name "*.java"` 这种一眼可见的检查，应该在写 `saf.rs` 那次就做，
 而不是等到用户反馈「文件打不开」才回头查。
+
+---
+
+## 第 51 轮：7 个新 app 补齐 SAF 双半；VectorCraft 重建验证
+
+### 补齐了什么
+
+7 个新 app 之前既没有 `saf.rs` 也没有 Java。现在各自都有：
+- `src/saf.rs`（Rust 侧 JNI 桥）
+- `MainActivity.java`（271 行，继承 `com.google.androidgamesdk.GameActivity`）
+- `Cargo.toml` 里的 `jni = "0.22"` + `ndk-context = "0.1"`
+- `lib.rs` 里的 `mod saf;`
+- `AndroidManifest.xml` 改成完整类名
+
+全部 `cargo +stable ndk check` → **0 error**。
+
+### 一个错位造成 15 个错误
+
+第一次用 `sed '3a mod saf;'` 把 `mod saf;` 插到了第 3 行 —— **在模块级 `//!` 文档注释上面**：
+
+```
+error[E0753]: expected outer doc comment
+  --> src/lib.rs:5:1
+```
+
+Rust 不允许 `//!` 出现在非注释项之后。每个 app 15 个错误，全部来自这一行错位。
+正确位置是 `//!` 块之后、`#![...]` 内部属性之后。
+
+### VectorCraft 重建验证
+
+```
+cargo +stable ndk ... build --release   →  libmain.so 89.0 MB
+gradlew assembleRelease                 →  APK 79.6 MB
+classes.dex: 1                          （Java 侧确实编进去了）
+aapt2: launchable-activity ai.storyteller.vectorcraft.MainActivity
+zipalign -c -P 16: PASS
+```
+
+### 还差什么
+
+**接线**。`saf.rs` 和 `MainActivity.java` 都在，但 `Services` 仍然是 `Default`
+（`services() { Services::default() }`），所以**没有任何代码调用 `saf::pick_media`**。
+点「打开」仍然没反应。
+
+接线需要的三块，本轮的探测已经确认都具备：
+1. `activity` = `AndroidApp::activity_as_ptr()`
+2. `data_dir` = `AndroidApp::internal_data_path()`
+3. 回灌路径用的 control 通道 —— 7 个 app 都有（`ControlRequest` / `control_server`）
+
+难点：`PickOpen = Box<dyn FnMut(&FilePick) -> Option<String>>` 是**同步**的，
+在 UI 线程调用。SAF 选择器是异步的（Java 起 Intent，Rust 侧轮询 250ms）。
+FilmCraft 的解法是返回 `None` 立刻返回、后台线程跑完再把路径经 `ControlRequest`
+回灌，让引擎执行**正常的** open 命令。
+
+**我没有只接一半**，因为那样比不接更糟：用户点了「打开」、系统选择器弹出来、
+选完文件，然后什么都没发生。要做就做完整的那条回路。
+
+每个 app 的 `ControlRequest` 形状都不同，所以这是逐个的活，不是机械复制。
