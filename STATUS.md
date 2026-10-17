@@ -639,3 +639,58 @@ designcraft / deckcraft / cadcraft 三个 `cargo +stable ndk check` → **0 erro
 类型却四种。批量 sed 在这里一定会失败 —— 而且失败方式很危险：
 如果签名恰好兼容但语义不同，就会编过、跑错、静默失败。
 必须逐个看真实的类型定义。
+
+---
+
+## 第 54 轮：WordCraft 接线完成（走 `engine.execute`）
+
+WordCraft 的 control 通道里**没有 `app.open`**，它只有：
+
+```
+app.quit  document.inspect  engine.commands  engine.execute  file.close
+ui.click  ui.drag  ui.focus  ui.inspect  ui.key  ui.move  ui.parity ...
+```
+
+但 `engine.execute` 可以执行任意引擎命令，而 WordCraft 的命令表里有 `file.open`：
+
+```
+"engine.execute" | "command" => {
+    let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
+    let params = p.get("params").cloned()...;
+    match app.execute(id, params) { ... }
+}
+```
+
+所以回灌的请求是：
+
+```rust
+ControlRequest::new("engine.execute", json!({
+    "command": "file.open",
+    "params": { "path": path }
+}))
+```
+
+效果和 `app.open` 完全一样 —— 走的是同一条引擎命令路径。
+
+`cargo +stable ndk check` → **0 error**。
+
+### 中途一个小坑
+
+第一次的替换脚本用正则 `Session::new\([^)]*\)` 匹配构造点，但 WordCraft 是
+`Session::new(wordcraft_doc::Document::new())` —— **括号嵌套**，`[^)]*` 在第一个
+`)` 处就停了，匹配失败。脚本打印「找不到构造点」然后退出，文件没被改动，
+所以 `check` 报 0 error（那是**原版**的 0 error，不是接线后的）。
+
+差点误判为成功。教训：**替换脚本失败后，`errors: 0` 不等于成功** ——
+必须同时确认目标代码真的被写进去了（`grep` 到 `pick_open` 才算）。
+
+### SAF 接线进度：9 / 13
+
+| app | 双半 | 接线 |
+|---|---|---|
+| VectorCraft / DesignCraft / DeckCraft / CadCraft / **WordCraft** | ✅ | ✅ |
+| FilmCraft / LightCraft / PhotoCraft / EffectCraft / PrintCraft | ✅ | ✅（老 app） |
+| SoundCraft | ✅ | ❌ **没有 `file.open`**：DAW 只有 `file.import_audio` /
+`file.import_midi` / `file.export_*`，语义不同，要单独设计 |
+| FigCraft | ✅ | ❌ `Services` 是 trait 不是 struct |
+| GridCraft | ✅（老 app） | 见老 app 记录 |

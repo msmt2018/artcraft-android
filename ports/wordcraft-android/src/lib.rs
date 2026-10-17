@@ -62,8 +62,15 @@ fn android_main(app: AndroidApp) {
         std::fs::create_dir_all(dir).ok();
     }
 
+    // The SAF picker answers asynchronously, but `Services::pick_open` is synchronous and runs on
+    // the UI thread. So the hook starts a background task and answers `None`; the chosen path comes
+    // back over the control channel and runs the normal `file.open` command.
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<wordcraft_ui_egui::ControlRequest>();
+    let activity = app.activity_as_ptr() as usize;
+
     let mut session = Session::new(wordcraft_doc::Document::new());
-    let mut vc = WordApp::new(session, services());
+    let mut vc = WordApp::new(session, services(ctrl_tx, activity, data_dir.clone()))
+        .with_control(ctrl_rx);
     // Preferences live in the app's private directory; `load_prefs`/`save_prefs` mirror the
     // desktop's ui.json / prefs.json pair.
     if let Some(dir) = &data_dir {
@@ -95,8 +102,47 @@ fn android_main(app: AndroidApp) {
 /// picker and clipboard hook is left `None`: the UI already handles that (its menus fall back to
 /// Wordcraft's own clipboard, and an unavailable picker reports itself), which keeps the first
 /// port honest instead of half-wired.
-fn services() -> Services {
-    Services::default()
+fn services(
+    ctrl: std::sync::mpsc::Sender<wordcraft_ui_egui::ControlRequest>,
+    activity: usize,
+    data_dir: Option<PathBuf>,
+) -> Services {
+    let mut services = Services::default();
+
+    // WordCraft's control channel has no `app.open`; it exposes `engine.execute`, which runs any
+    // engine command by id. `file.open` is one of those, so the round trip is the same shape.
+    let open_ctrl = ctrl.clone();
+    let open_dir = data_dir.clone();
+    services.pick_open = Some(Box::new(move |_purpose: &str| {
+        let Some(dir) = open_dir.clone() else {
+            log::warn!("SAF: no data dir; cannot open the picker");
+            return None;
+        };
+        let ctrl = open_ctrl.clone();
+        std::thread::spawn(move || {
+            let paths = saf::pick_media(activity, &dir, std::time::Duration::from_secs(300));
+            let Some(path) = paths.into_iter().next() else {
+                log::info!("SAF: nothing picked");
+                return;
+            };
+            log::info!("SAF: opening {path}");
+            let (req, _rx) = wordcraft_ui_egui::ControlRequest::new(
+                "engine.execute",
+                serde_json::json!({ "command": "file.open", "params": { "path": path } }),
+            );
+            if ctrl.send(req).is_err() {
+                log::warn!("SAF: control channel closed; {path} was not opened");
+            }
+        });
+        None
+    }));
+
+    services.pick_save = Some(Box::new(move |_name: &str| {
+        log::info!("SAF: save still uses WordCraft's own export directory; the system picker is not wired here yet");
+        None
+    }));
+
+    services
 }
 
 /// Wordcraft's own preferences, in the app's private data directory.
