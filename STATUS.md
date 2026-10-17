@@ -292,3 +292,56 @@ crates/core/src/feed.rs:191     format!("https://github.com/{repo}/releases/")
 ├── shots/                     真机截图
 └── logs/                      构建日志
 ```
+
+---
+
+## 第 48 轮：13 个 APK 全部就位；6 个新 app 在模拟器上装机验证
+
+### release 清单（13 个资产，全部 zipalign -P 16 通过）
+
+| APK | 大小 |
+|---|---|
+| ArtCraftLauncher-0.4.1 | 22 MB |
+| CADCraft | 30 MB |
+| DeckCraft | 44 MB |
+| DesignCraft | 65 MB |
+| EffectCraft-0.4.0 | 65 MB |
+| FigCraft | 47 MB |
+| FilmCraft-0.2.1 | 42 MB |
+| GridCraft-0.7.0 | 29 MB |
+| LightCraft-0.2.1 | 33 MB |
+| PhotoCraft-0.3.0 | 44 MB |
+| PrintCraft-0.2.1 | 47 MB |
+| SoundCraft | 27 MB |
+| WordCraft | 55 MB |
+
+### 模拟器装机验证（emulator-5554 / API 36）
+
+**注意：真机当时锁屏，vivo 会静默丢弃安装，所以这批验证是在模拟器上做的。**
+
+6 个新 APK 全部 `pm install` → `Success`，13 个 storyteller 包全部在设备上。
+逐个冷启动 12 秒后看进程是否存活：
+
+| app | 结果 |
+|---|---|
+| DesignCraft | ✅ 存活 pid=4993 |
+| WordCraft | ✅ 存活 pid=5093 |
+| DeckCraft | ✅ 存活 pid=5141 |
+| CADCraft | ✅ 存活 pid=5178 |
+| **SoundCraft** | ✅ **存活 pid=5233**（cpal/AAudio 那条链真的能跑） |
+| FigCraft | ❌ `Process ... failed to attach` |
+
+**FigCraft 的失败形态与其他都不同**：进程确实起来了（pid=5286），
+但日志是 `W ActivityManager: Process ... failed to attach`，且
+`SurfaceSyncGroup: Failed to receive transaction ready in 1000ms`。
+没有 FATAL / SIGSEGV，所以不是崩溃 —— 更像是**初始化耗时超过 splash 窗口**
+导致 attach 超时。下一步该看它启动时卡在哪一步（可能和它比别的 app 多做
+collab-net / layout 初始化有关）。
+
+### SoundCraft 的教训（已单独提交）
+
+`ld.lld: error: unable to find library -laaudio` 的根因不是 oboe，是
+**cargo-ndk 用了 Rust target triple 里的 API 级别（android24）**，而 AAudio 从
+API 26 才有。Gradle 的 minSdk 是 31，原生侧却按更低级别构建。
+修法：`cargo +stable ndk -t arm64-v8a -P 31 ...`（**`-P` 大写** = --platform；
+小写 `-p` 是 --package，传数字会 panic）。
