@@ -345,3 +345,53 @@ collab-net / layout 初始化有关）。
 API 26 才有。Gradle 的 minSdk 是 31，原生侧却按更低级别构建。
 修法：`cargo +stable ndk -t arm64-v8a -P 31 ...`（**`-P` 大写** = --platform；
 小写 `-p` 是 --package，传数字会 panic）。
+
+---
+
+## 第 49 轮：FigCraft 的「attach 超时」其实是模拟器的 SwiftShader 限制
+
+上一轮我把它记成「初始化超出 splash 窗口」。拿到完整日志后，真实原因完全不同：
+
+```
+I FigCraft: egui_wgpu: There are 2 available wgpu adapters:
+            {backend: Vulkan, device_type: Cpu, name: "SwiftShader Device (LLVM 10.0.0)"}
+W FigCraft: wgpu_hal::gles::egl: Error in create_window_surface: BadAlloc
+I RustStdoutStderr: thread '<unnamed>' (5389) panicked at wgpu-30.0.1/src/backend/wgpu_core.rs:3981:
+I RustStdoutStderr: wgpu error: Validation Error
+I RustStdoutStderr: Caused by:
+I RustStdoutStderr:   In Surface::configure
+I RustStdoutStderr:     Invalid surface
+```
+
+**不是崩溃，也不是初始化慢，是 `create_window_surface` 拿不到 GPU surface。**
+模拟器只有 SwiftShader 软件渲染（`device_type: Cpu`），`BadAlloc` 就是分配失败。
+wgpu 默认把这类错误当 fatal，于是 panic，进程随后被 ActivityManager 回收，
+表面现象就成了 `Process ... failed to attach`。
+
+### 两台设备的 GPU 对比（实测）
+
+```
+模拟器 emulator-5554 (API 36):
+  wgpu 选到: SwiftShader Device (LLVM 10.0.0), device_type = Cpu
+  create_window_surface -> BadAlloc
+
+真机 vivo PA2573 (Android 16 / arm64-v8a):
+  GLES: ARM, Mali-G925-Immortalis MC12, OpenGL ES 3.2
+  vulkan_renderengine: false
+```
+
+真机有真实 GPU，FigCraft 在上面**应该正常** —— 但这台真机当时锁屏，
+vivo 会拒绝安装（`INSTALL_FAILED_ABORTED: User rejected permissions`），
+所以这一项还没能验证。
+
+### 结论与后续
+
+1. **FigCraft 的 APK 本身没有问题**（`zipalign` / `aapt2` / 链接都过了，
+   编译 0 error），失败只发生在软件渲染的模拟器上。
+2. 要验证它必须用真机（或带 GPU 加速的模拟器）。
+3. 如果确实需要在模拟器上跑，可给 wgpu 设
+   `WGPU_BACKEND=gl` 或降级 adapter 选择，但那只是让 CI 能截图，
+   不代表真实表现。
+
+**这是我之前误判的一次，记下来**：`failed to attach` 这种系统层的间接症状，
+一定要先看应用自己的日志再做归因。
