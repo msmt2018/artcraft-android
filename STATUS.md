@@ -1054,3 +1054,51 @@ impl Host for SafHost {
 | 原版图标 | 13 / 13 |
 
 ArtCraft 的 SAF 工作**到此完整**。剩下的是 Blender 的原生侧。
+
+---
+
+## 第 62 轮：清理孤儿 MainActivity.java（37 → 13）
+
+### 发现
+
+全仓库有 **37 个 `MainActivity.java`**，但只有 13 个 app。原因是：我把
+`gridcraft-android` 当作模板复制到每个新 app 时，模板里的
+`android/app/src/main/java/ai/storyteller/gridcraft/MainActivity.java`
+**一起被复制过来了**，而我的 sed 只把「目标 app 的包名」改对，那份 gridcraft 的
+原样留着。
+
+后果：每个新 app 的 APK 里都编进了 271 行属于别人的死代码。manifest 指向的是
+正确的那份类，所以功能上没坏，但它是**能编译、能打包、永远不会被执行**的代码 ——
+最难被发现的那一类垃圾。
+
+### 清理
+
+删掉了 15 个孤儿目录（`src/` 下 8 个 + `ports/` 下 7 个），
+`MainActivity.java` 从 37 降到 13。
+
+### 我同时误删了一个合法文件
+
+清理脚本靠「路径里的 `<name>-android/` 推断 owner，再和包名比对」来判断孤儿。
+启动器的路径是 `src/craft-launcher/apps/craft-launcher-android/...`，匹配出来
+`owner` 是整个路径、`package` 是 `artcraftlauncher` —— 两者不等，于是被误删。
+
+```bash
+owner=./src/craft-launcher/apps/craft-launcher-android/.../MainActivity.java
+package=artcraftlauncher
+```
+
+**启动器已发布的 APK（22.5 MB）不受影响**，但重建能力被破坏。已从
+`dist-repos/craft-launcher-android/templates/android-shell/.../MainActivity.java`
+模板恢复。
+
+### 教训
+
+**批量删除脚本的「判定条件不匹配」和「判定条件误命中」都很危险，而后者更隐蔽。**
+
+这次是后者：脚本跑完打印了 15 行删除日志，看起来完全正常，但其中一行删错了。
+如果只有一个「删了 15 个」的汇总数字，这个错误会被完全掩盖。
+
+**所以批量删除必须逐条打印被删的路径**，并且在删之后对照预期数量 —— 这次
+「37 → 13」是对的，但里面有 1 个是错的、少了 1 个是对的，总数掩盖了两者的抵消。
+
+更稳的做法：先把候选项写到文件里，人工扫一遍，再执行删除。
