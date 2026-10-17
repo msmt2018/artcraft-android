@@ -1,24 +1,31 @@
-# 大文件与临时产物不入库
-dmg/
-# 上游克隆（可丢弃的工作树；记录载体是 patches/ + 文档 + shots/）
+# Cloned upstream sources (each is reproducible from github.com/storytold/<repo>);
+# the Android work lives in patches/ and scripts/.
 filmcraft/
 lightcraft/
 photocraft/
 effectcraft/
 printcraft/
-android-activity/
 filmcraft-web/
-tools/
-*.dmg
-*.zip
-*.so
-**/jniLibs/
+
+# Build trees and cargo output
 target/
 **/target/
-.gradle/
 **/build/
-local.properties
-.DS_Store
+**/.gradle/
+**/jniLibs/
 
-# 日志文件不入库（emulator.log 曾泄露本机路径、用户名与 ADB 公钥）
+# Local toolchains / probes / logs
+android-activity/
+tools/
+probe/
 *.log
+emulator.log
+
+# Native artefacts
+*.so
+*.a
+*.o
+*.apk
+
+# dmg/ and dist/ hold release APKs -- keep dist/ (small, useful) but not dmg/
+dmg/
