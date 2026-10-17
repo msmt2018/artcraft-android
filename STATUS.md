@@ -395,3 +395,79 @@ vivo 会拒绝安装（`INSTALL_FAILED_ABORTED: User rejected permissions`），
 
 **这是我之前误判的一次，记下来**：`failed to attach` 这种系统层的间接症状，
 一定要先看应用自己的日志再做归因。
+
+---
+
+## 第 50 轮：SAF 桥接补齐后，FilmCraft 重装并跑到自检
+
+### 发现了什么
+
+`saf.rs` 一直在 `patches/filmcraft-android/src/` 里，它调用 Activity 上的六个方法：
+
+```
+safPickMedia()V   safIsDone()Z      safPickSave(String)V
+safSaveDone()Z    safHasSaveUri()Z  safPublish(String)Z
+```
+
+**这六个方法一个都不存在。** 整个工程里没有任何 `.java` / `.kt` 文件 ——
+manifest 里的 `.MainActivity` 解析到的是 `androidx.games:games-activity`
+依赖自带的 `GameActivity`，桥接从来没实现。
+
+后果是静默的：`saf.rs` 的 `call()` 返回 `Option`，上层 `unwrap_or(false)`
+把「Java 方法不存在」变成了「用户取消了」，于是文件对话框什么都不做、也不报错。
+这正是「打开关闭文件有问题」的真相。
+
+### 补了什么
+
+`MainActivity.java`（271 行），继承 `com.google.androidgamesdk.GameActivity`：
+
+| 能力 | 实现 |
+|---|---|
+| 导入 | `ACTION_OPEN_DOCUMENT` + `EXTRA_ALLOW_MULTIPLE`；每个 `content://`
+文档拷到 `filesDir/import/`，真实路径逐行写入 `filesDir/import-manifest.txt`
+（Rust 侧本来就在轮询这个文件） |
+| 保存 | `ACTION_CREATE_DOCUMENT`；URI 留在 Java 侧，`safPublish` 用
+`openOutputStream` 流式写入 |
+| 权限 | 两条路径都 `takePersistableUriPermission`，用 try/catch 包住 ——
+provider 不支持持久授权时退回一次性授权，而不是抛异常 |
+| 取消 | 写**空** manifest 而不是留着上一次的，避免「取消导入」反而重导上次的文件 |
+| 重名 | 加 ` (2)` 后缀而不是覆盖 —— 从不同文件夹选两个同名文件是正常操作 |
+
+已推广到 FilmCraft / LightCraft / PhotoCraft / EffectCraft / PrintCraft 五个 app。
+
+### 验证到哪一步了
+
+FilmCraft 重新构建（42.4 MB，`classes.dex` 存在，
+`aapt2` 报 `launchable-activity ai.storyteller.filmcraft.MainActivity`），
+装到 emulator-5554 并启动。日志显示**媒体自检真的跑通了**：
+
+```
+I main: filmcraft-android: H.264 自检: 解码器 MediaCodec H.264 | 样本 30 个
+        → 解出 30 帧（320x240）| 硬件计数 帧 30 会话 1 拒绝 0 回退 0
+W filmcraft_platform::hybrid: MediaCodec HEVC failed (decode error);
+        continuing with the software decoder
+```
+
+HEVC 在模拟器上硬件解码失败但正确回退到软件解码器 —— 这个回退路径也是对的。
+
+**还没验证的**：SAF 选择器本身。FilmCraft 跑完自检后 Activity 收到 `CLOSE`
+（`Transition type = CLOSE`），窗口关闭、进程被 freeze，所以没法接着去点
+「打开」按钮。要点的话得先让它进入正常编辑界面（有项目可开时），
+或者用坐标点击。egui 渲染在 SurfaceView 里没有可访问性树，
+`uiautomator dump` 拿不到它的控件，只能靠看截图算坐标。
+
+### 待办
+
+1. **7 个新 craft app 的 SAF**：VectorCraft / FigCraft / DesignCraft / WordCraft /
+   DeckCraft / CadCraft / SoundCraft 连 `saf.rs` 都还没有。它们的 `Services`
+   目前是 `Default`（即「未接文件对话框」），需要按 filmcraft 的模式补
+   Rust 侧 + Java 侧。
+2. **SAF 端到端**：需要在能进编辑界面的前提下点一次「打开」，看系统选择器是否弹出。
+3. **Blender SAF**：打开/导入/导出/输出三条路径，工程量在 `BKE_file`/`BLI_file`
+   只认 POSIX 路径。
+
+### 教训
+
+**静默失败比崩溃难查得多。** 跨语言桥接的代码，必须逐项确认对端真的存在 ——
+`find . -name "*.java"` 这种一眼可见的检查，应该在写 `saf.rs` 那次就做，
+而不是等到用户反馈「文件打不开」才回头查。
