@@ -886,3 +886,58 @@ cargo +stable ndk check   → 0 error
 | wordcraft | `FnMut(&str) -> Option<String>` |
 | soundcraft | `Fn(&str, &str) -> Option<String>` |
 | figcraft | `trait` + `DialogFuture` |
+
+---
+
+## 第 58 轮：`pick_save` 推广到 4 个 app
+
+两段式实现已经固化成一个脚本，套到签名相同的 4 个 app 上：
+
+| app | `pick_save` 签名 | 结果 |
+|---|---|---|
+| **DesignCraft** | `FnMut(&str) -> Option<String>` | ✅ 0 error |
+| **DeckCraft** | `FnMut(&str) -> Option<String>` | ✅ 0 error |
+| **CadCraft** | `FnMut(&str) -> Option<String>` | ✅ 0 error |
+| **WordCraft** | `FnMut(&str) -> Option<String>` | ✅ 0 error |
+
+这四个的签名里那个 `&str` **就是建议文件名**（不是 purpose），所以直接拿它当
+export 目录里的叶子名。
+
+### SoundCraft 需要单独处理
+
+脚本在 SoundCraft 上失败了，原因不是签名问题，而是**形状问题**：
+
+```rust
+// 其他 app：赋值形式
+services.pick_save = Some(Box::new(...));
+
+// SoundCraft：结构体字面量，三个字段一起给
+Services {
+    pick_open: Some(...),
+    pick_save: Some(...),
+    pick_folder: None,
+}
+```
+
+所以要在 `Services { ... }` 里就地替换那个 `pick_save: Some(...)` 表达式，
+不能用「找 `services.pick_save =` 赋值」的策略。留给下一轮。
+
+（它的签名是 `Fn(&str, &str) -> Option<String>` —— `(purpose, default_name)`，
+用第二个参数当建议文件名。）
+
+### 验证
+
+```
+grep -c "saf::publish"  → 各 1
+cargo +stable ndk check → 各 0 error
+```
+
+### SAF 完成度
+
+| 能力 | 进度 |
+|---|---|
+| 打开路径 | **13 / 13** |
+| 保存路径 | **5 / 13**（VectorCraft + 本轮 4 个） |
+
+剩：soundcraft（形状不同）、figcraft（trait + DialogFuture）、以及 5 个老 app
+（FilmCraft 已有，其余 4 个待查）。
