@@ -582,3 +582,60 @@ services.pick_open = Some(Box::new(move |_pick: &FilePick| {
 接线模式完全一样，但每个 app 的 `ControlRequest` 方法名和 `Services` 字段
 需要各自确认（VectorCraft 是 `app.open` + `pick_open`）。逐个做，不批量 sed ——
 批量改跨语言回调是最容易留下静默失败的方式。
+
+---
+
+## 第 53 轮：SAF 接线扩展到另外 3 个 app
+
+### 每个 app 的 `Services` 签名都不同
+
+这是本轮最花时间的部分 —— 同一个 `pick_open`，六个 app 四种签名：
+
+| app | `pick_open` 类型 |
+|---|---|
+| VectorCraft | `Box<dyn FnMut(&FilePick) -> Option<String>>`（`FilePick` 是结构体） |
+| **designcraft / deckcraft** | `Box<dyn FnMut(&str) -> Option<String>>`（purpose 字符串） |
+| **cadcraft** | `Box<dyn Fn() -> Option<String>>`（无参数） |
+| wordcraft / soundcraft | 有 `pick_open`，但 control 里没有 `app.open` |
+| figcraft | `Services` 是 **trait**，设计不同 |
+
+我先按 VectorCraft 的形状写了一版通用接线脚本，然后被 `error[E0425]: cannot find
+type FilePick` 一次性打回三个 app。查明后按各自签名重写，全部 0 error。
+
+### 接好的三个
+
+```rust
+services.pick_open = Some(Box::new(move |_purpose: &str| {
+    let Some(dir) = open_dir.clone() else { return None };
+    let ctrl = open_ctrl.clone();
+    std::thread::spawn(move || {
+        let paths = saf::pick_media(activity, &dir, Duration::from_secs(300));
+        let Some(path) = paths.into_iter().next() else { return };
+        let (req, _rx) = ControlRequest::new("app.open", json!({ "path": path }));
+        let _ = ctrl.send(req);
+    });
+    None
+}));
+```
+
+designcraft / deckcraft / cadcraft 三个 `cargo +stable ndk check` → **0 error**。
+
+### 进度
+
+| app | SAF 双半 | 接线 |
+|---|---|---|
+| VectorCraft | ✅ | ✅ |
+| **DesignCraft** | ✅ | ✅ **本轮** |
+| **DeckCraft** | ✅ | ✅ **本轮** |
+| **CadCraft** | ✅ | ✅ **本轮** |
+| WordCraft | ✅ | ❌ 缺 `app.open` 方法名 |
+| SoundCraft | ✅ | ❌ 缺 `app.open` 方法名 |
+| FigCraft | ✅ | ❌ `Services` 是 trait，设计不同 |
+| FilmCraft/LightCraft/PhotoCraft/EffectCraft/PrintCraft | ✅ | ✅（老 app 已接） |
+
+### 教训
+
+**「同一个接口」在跨 6 个代码库时并不存在。** `pick_open` 这个名字一样，
+类型却四种。批量 sed 在这里一定会失败 —— 而且失败方式很危险：
+如果签名恰好兼容但语义不同，就会编过、跑错、静默失败。
+必须逐个看真实的类型定义。
