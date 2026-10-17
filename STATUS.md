@@ -820,3 +820,69 @@ cargo +stable ndk check                → 0 error
 每个 app 的 export 目录和临时文件流程都不一样，还没有逐个查清。
 宁可留一条明确的日志，也不返回一个假路径 —— 那样就会重现这次花了好几轮
 才消除的那种静默失败。
+
+---
+
+## 第 57 轮：`pick_save` 两段式保存（VectorCraft 示范）
+
+### 为什么不能返回 `None`
+
+`pick_save` 的返回值是**应用要写入的路径**。返回 `None` 的话，应用会认为
+「用户没有选目标」，于是**根本不写文件**。所以这里不能像打开那样返回 `None`
+再回灌 —— 必须马上给一个真实可写的路径。
+
+### 两段式（照 FilmCraft 的模型）
+
+```rust
+services.pick_save = Some(Box::new(move |pick: &FilePick| {
+    let scratch = export_dir.join(leaf);          // 1. 给应用一个私有目录里的路径
+    let scratch_string = scratch.to_string_lossy().into_owned();
+    std::thread::spawn(move || {
+        // 2. 后台：先问用户要存到哪
+        if !saf::pick_save(activity, &leaf, Duration::from_secs(300)) { return; }
+        // 3. 等应用把文件写完（连续 1.5 秒大小不变）
+        loop { ... if size > 0 && stable_since.elapsed() > 1500ms { break } ... }
+        // 4. 拷到用户选的位置
+        saf::publish(activity, &scratch_path);
+    });
+    Some(scratch_string)
+}));
+```
+
+**关键是「等待写完」那段**：`pick_save` 返回路径时文件还不存在，应用是在
+之后的帧里写。所以后台线程要轮询文件大小，直到连续 1.5 秒不再变化。
+直接 `publish` 会拷到一个空文件或不存在的文件。
+
+### 所有权处理（踩了两个坑）
+
+第一版有两个编译错误：
+
+```
+error[E0597]: `name` does not live long enough          // leaf 借用了 name
+error[E0382]: use of moved value: `scratch_string`      // 既 move 进线程又返回
+```
+
+修法：
+- `leaf` 用 `String`（`.to_owned()`），不借 `name`
+- `scratch_string.clone()` 一份给线程，原始的返回给应用
+
+### 验证
+
+```
+grep -c "saf::publish"    → 1
+grep -c "saf::pick_save"  → 1
+cargo +stable ndk check   → 0 error
+```
+
+### 剩下 12 个 app
+
+同样的两段式可以套，但每个 app 的 export 目录和 `pick_save` 签名不同：
+
+| app | `pick_save` 签名 |
+|---|---|
+| VectorCraft | `FnMut(&FilePick) -> Option<String>` |
+| designcraft / deckcraft | `FnMut(&str) -> Option<String>` |
+| cadcraft | `FnMut(&str) -> Option<String>` |
+| wordcraft | `FnMut(&str) -> Option<String>` |
+| soundcraft | `Fn(&str, &str) -> Option<String>` |
+| figcraft | `trait` + `DialogFuture` |

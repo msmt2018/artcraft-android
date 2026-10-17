@@ -139,9 +139,64 @@ fn services(
         None
     }));
 
-    services.pick_save = Some(Box::new(move |_pick: &vectorcraft_ui_egui::FilePick| {
-        log::info!("SAF: save uses the app's own export directory; the system picker is not wired here yet");
-        None
+    // Saving is two-stage, the way FilmCraft does it: answer with a real path in the app's own
+    // export directory so the app can write immediately, and run the SAF save picker on a thread
+    // that then waits for that file and copies it to the chosen destination. Answering `None` here
+    // instead would make the app report "no destination chosen" and never write at all.
+    let save_dir = data_dir.clone();
+    services.pick_save = Some(Box::new(move |pick: &vectorcraft_ui_egui::FilePick| {
+        let dir = save_dir.clone()?;
+        let export_dir = dir.join("export");
+        std::fs::create_dir_all(&export_dir).ok()?;
+        // The suggested name, reduced to a leaf: the app writes here and the publisher copies it out.
+        let requested: String = if pick.name.is_empty() { "export".to_owned() } else { pick.name.clone() };
+        let leaf: String = requested
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("export")
+            .to_owned();
+        let export_dir = dir.join("export");
+        if std::fs::create_dir_all(&export_dir).is_err() {
+            log::warn!("SAF: could not create {}", export_dir.display());
+            return None;
+        }
+        let scratch = export_dir.join(&leaf);
+        let scratch_string = scratch.to_string_lossy().into_owned();
+        log::info!("SAF: save dialog -> {scratch_string}");
+
+        // Ask where it should land, then wait for the app to finish writing and copy it there.
+        let publish_path = scratch_string.clone();
+        let publish_leaf = leaf.clone();
+        std::thread::spawn(move || {
+            if !saf::pick_save(activity, &publish_leaf, std::time::Duration::from_secs(300)) {
+                log::info!("SAF: no export destination chosen; the file stays at {publish_path}");
+                return;
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+            let (mut size, mut stable_since) = (0u64, std::time::Instant::now());
+            loop {
+                let now = std::fs::metadata(&publish_path).map(|m| m.len()).unwrap_or(0);
+                if now != size {
+                    size = now;
+                    stable_since = std::time::Instant::now();
+                } else if size > 0 && stable_since.elapsed() > std::time::Duration::from_millis(1500) {
+                    break;
+                }
+                if std::time::Instant::now() > deadline {
+                    log::warn!("SAF: giving up on publishing {publish_path} (nothing was written)");
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            if saf::publish(activity, &publish_path) {
+                log::info!("SAF: published {publish_path} ({size} bytes)");
+            } else {
+                log::warn!("SAF: publishing {publish_path} failed; the file stays in the export directory");
+            }
+        });
+
+        Some(scratch_string)
     }));
 
     services
