@@ -16,6 +16,8 @@
 //! Known gaps are listed in the crate README; none of them stop the UI from coming up.
 #![cfg(target_os = "android")]
 
+mod saf;
+
 use std::path::PathBuf;
 
 use figcraft_engine::Session;
