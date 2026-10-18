@@ -1162,3 +1162,77 @@ FigCraft 那次是同一个根因，只是表现不同 —— FigCraft 在 `crea
 
 这个坑很典型：**截图字节数只能说明「屏幕上有东西」，不能说明「那是我的东西」**。
 要判断某个 app 的界面，必须看图，不能看文件大小。
+
+---
+
+## 第 69 轮：找到了「文件打开/保存不调用安卓文件管理器」的真正原因
+
+### 症状
+
+真机上点 VectorCraft 的 **File ▸ Open...**，应用**直接回到桌面**，
+没有弹系统文件选择器。
+
+### 根因：增量构建过期，`MainActivity.java` 从没被编译进 APK
+
+逐层验证：
+
+| 检查项 | 结果 |
+|---|---|
+| APK 的 `launchable-activity` | `ai.storyteller.vectorcraft.MainActivity` ✅ |
+| `libmain.so` 里的 `safPickMedia` 等字符串 | ✅ 有（5 个） |
+| **`classes.dex` 里的 `safPickMedia` 等** | **❌ 一个都没有** |
+| `classes.dex` 里有什么 | 只有 `R$color` / `R$drawable` / `R$mipmap` / `R$style` |
+
+也就是说：**原生侧写好了、Java 源文件也写好了，但 javac 从来没编译过那个
+Java 文件** —— dex 里只有资源类。
+
+原因：`MainActivity.java` 是在上一次 Java 编译**之后**才加进
+`app/src/main/java/` 的，而 Gradle 的 up-to-date 检查认为
+`compileReleaseJavaWithJavac` 不需要重跑。我一直只删 `app-release.apk`
+重打包，那不会重新编译 Java。
+
+### 修法
+
+```bash
+rm -rf app/build/intermediates/javac app/build/intermediates/classes
+./gradlew :app:compileReleaseJavaWithJavac --rerun-tasks
+```
+
+结果：
+
+```
+app/build/intermediates/javac/release/.../ai/storyteller/vectorcraft/MainActivity.class  ✅
+```
+
+重新打包后：
+
+```
+APK 79.7 MB
+dex 里的 SAF 方法: safHasSaveUri safIsDone safPickSave safPublish safSaveDone
+MainActivity 引用: 3        ✅
+libmain.so: 5 个 safPick* 字符串 ✅
+```
+
+### 这个 bug 为什么藏了这么久
+
+我前面几轮验证的手段全是「编译通过」「grep 到 `saf::pick_media`」
+「`.so` 里有字符串」—— **这些全都是「代码存在」的证据，不是「代码进了 APK」的证据**。
+
+而 dex 检查我一次都没做过。如果早一点对**安装的 APK** 做
+`unzip -p classes.dex | strings | grep safPick`，这个问题第一轮就会暴露。
+
+### 教训（和前面几轮同一条，但这次最深）
+
+**验证必须针对「最终产物」，不是「源代码」或「中间产物」。**
+
+| 我验证的 | 实际应该验证的 |
+|---|---|
+| 源码里有 `saf::pick_media` | **装到设备上的 APK 的 dex 里有 `safPickMedia`** |
+| `.so` 里有 `safPick*` 字符串 | 同上 |
+| `gradlew assembleRelease` 成功 | 同上 + 真机点一次 |
+
+### 还没验证的
+
+设备在这一轮结束时离线了（mDNS 也发现不到），所以**没能把新 APK 装上去点一次**。
+下一步：设备上线后 `adb install -r` 这个 79.7 MB 的 APK，点 File ▸ Open，
+应该能看到系统文件选择器。
