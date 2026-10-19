@@ -1343,3 +1343,23 @@ photocraft / effectcraft / printcraft 的补丁**从来没进过 git**。已改�
 
 ### 改动落地
 `scripts/fix-saf-java.py` 可幂等地把两个修复打到每个 `MainActivity.java`，已跑过全部 12 个应用。
+
+### 7. `gh release upload` 一直 408 —— 是 VPN 的 TUN，不是 GitHub
+上传 40–70 MB 的 APK 时反复 `HTTP 408: Upload body timed out`，而下载一切正常。
+原因：Clash 的 TUN 会返回**假 IP**（`198.18.0.0/15`），上传流量被塞进隧道后只有 ~30 KB/s 并被重置。
+注意 `dig +short uploads.github.com` 在 VPN 运行时返回的就是假 IP，所以拿不到真地址。
+
+绕过办法（实测 30 KB/s → 10 MB/s）：把 `uploads.github.com` 钉到真实地址，并绑定物理网卡：
+
+```bash
+curl --interface en0 --resolve uploads.github.com:443:20.205.243.161 \
+     -X POST -H "Authorization: token $TOKEN" \
+     -H "Content-Type: application/octet-stream" \
+     --data-binary @app.apk \
+     "https://uploads.github.com/repos/<owner>/<repo>/releases/<numeric-release-id>/assets?name=app.apk"
+```
+
+注意 release id 要用**数字 id**（`gh api repos/<owner>/<repo>/releases/tags/<tag> --jq .id`），
+不是 `gh release view --json id` 返回的 `RE_...` node id。
+同名资产重复上传会被拒（`already_exists`），要先 DELETE 再 POST。
+已固化为 `scripts/gh-upload.sh`（自动替换同名资产）。
