@@ -43,6 +43,14 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
     private volatile boolean hasSaveUri = false;
     private Uri saveUri = null;
 
+    /* Android-port: PrintCraft's Rust side is the odd one out -- it implements pdfcraft's
+     * `fd::Host` trait and looks up "safPickDocuments", not "safPickMedia" like the other eleven
+     * apps. Without this alias the JNI lookup fails, the exception is swallowed, and the picker
+     * never opens. Keep both names so the shared SAF code and this app both work. */
+    public void safPickDocuments() {
+        safPickMedia();
+    }
+
     /** ACTION_OPEN_DOCUMENT, any number of files. Results land in the manifest. */
     public void safPickMedia() {
         importDone = false;
