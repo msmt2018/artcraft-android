@@ -1,11 +1,11 @@
 # Cloned upstream sources (each is reproducible from github.com/storytold/<repo>);
 # the Android work lives in patches/ and scripts/.
-filmcraft/
-lightcraft/
-photocraft/
-effectcraft/
-printcraft/
-filmcraft-web/
+/filmcraft/
+/lightcraft/
+/photocraft/
+/effectcraft/
+/printcraft/
+/filmcraft-web/
 
 # Build trees and cargo output
 target/

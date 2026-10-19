@@ -50,12 +50,25 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        try {
-            startActivityForResult(intent, REQ_OPEN);
-        } catch (Exception e) {
-            Log.w(TAG, "no activity can handle ACTION_OPEN_DOCUMENT", e);
-            importDone = true;
-        }
+        /* Android-port: vivo's file manager decides which UI to show from the MIME type. With a
+         * bare all-types MIME it opens its *media* selector (图片 / 时光轴 / 相册集), where a .svg,
+         * .pdf or .blend cannot be selected at all -- the picker "appears" but is useless for
+         * documents. A non-visual EXTRA_MIME_TYPES list makes it open the real document browser
+         * (全部 / 图片 / 文档 / 其他, with 最近 and 设备存储). Verified on the device. */
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+            "application/octet-stream",
+            "application/pdf",
+            "image/svg+xml",
+            "text/plain",
+        });
+        runOnUiThread(() -> {
+            try {
+                startActivityForResult(intent, REQ_OPEN);
+            } catch (Exception e) {
+                Log.w(TAG, "no activity can handle ACTION_OPEN_DOCUMENT", e);
+                importDone = true;
+            }
+        });
     }
 
     /** True once the import picker has finished and the manifest is written. */
@@ -72,12 +85,14 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_TITLE, suggestedName);
-        try {
-            startActivityForResult(intent, REQ_SAVE);
-        } catch (Exception e) {
-            Log.w(TAG, "no activity can handle ACTION_CREATE_DOCUMENT", e);
-            saveDone = true;
-        }
+        runOnUiThread(() -> {
+            try {
+                startActivityForResult(intent, REQ_SAVE);
+            } catch (Exception e) {
+                Log.w(TAG, "no activity can handle ACTION_CREATE_DOCUMENT", e);
+                saveDone = true;
+            }
+        });
     }
 
     /** True once the save picker has finished (whether or not a destination was chosen). */
