@@ -2,6 +2,8 @@ package ai.storyteller.cadcraft;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
 import android.net.Uri;
 import android.provider.DocumentsContract;
 import android.util.Log;
@@ -262,15 +264,28 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
     /** The document's display name, falling back to the last path segment. */
     private String displayName(@NonNull Uri uri) {
         String name = null;
-        try {
-            name = DocumentsContract.getDocumentId(uri);
-            int slash = name.lastIndexOf('/');
-            if (slash >= 0) {
-                name = name.substring(slash + 1);
+        // Android-port: DISPLAY_NAME is the only place the *extension* survives. The document id
+        // below is an opaque number for media-provider URIs, so naming the copy after it produces
+        // an extension-less file that the app cannot identify. Ask the provider first.
+        try (Cursor c = getContentResolver().query(uri,
+                new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) {
+                name = c.getString(0);
             }
-            int colon = name.indexOf(':');
-            if (colon >= 0) {
-                name = name.substring(colon + 1);
+        } catch (Throwable ignored) {
+            // Provider does not implement DISPLAY_NAME; fall back to the document id.
+        }
+        try {
+            if (name == null || name.isEmpty()) {
+                name = DocumentsContract.getDocumentId(uri);
+                int slash = name.lastIndexOf('/');
+                if (slash >= 0) {
+                    name = name.substring(slash + 1);
+                }
+                int colon = name.indexOf(':');
+                if (colon >= 0) {
+                    name = name.substring(colon + 1);
+                }
             }
         } catch (Throwable ignored) {
             // Not a document URI after all; use the path segment below.
