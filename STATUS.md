@@ -1296,3 +1296,50 @@ Open/Save/Save As/Close All 等项）。
 - `dsh-octave-dev` → Octave 和 dsh 的文件打开/保存
 - `lightcraft-dev` → FreeCAD 的 QFileDialog → SAF
 - `printcraft-dev` → 全部 12 个 ArtCraft app 的端到端验证 + 修 PrintCraft
+
+---
+
+## 2026-10-19：选择器为什么「从不出现」——两个独立 bug，都在真机上找到
+
+### 1. `startActivityForResult` 跑在非 UI 线程
+Rust 侧在轮询线程里调 `safPickMedia()`，而开启 Activity 必须回到 UI 线程，否则抛异常；
+JNI 包装又把这个异常吞掉了，于是**失败完全静默**。修法：两个 picker 都包进 `runOnUiThread`。
+
+### 2. 选择器出来了，但对文档没用（这才是真正卡住的那一层）
+vivo 的文件管理器**根据 intent 的 MIME 类型决定界面**：
+
+| intent | 实际打开的界面 | 能选 .svg / .pdf / .blend 吗 |
+|---|---|---|
+| `setType("*/*")`，无 extra | 媒体选择器（图片 / 时光轴 / 相册集） | ❌ 完全不能 |
+| 加 `EXTRA_MIME_TYPES`（非纯视觉的列表） | 文档浏览器（全部 / 图片 / 文档 / 其他 + 最近 + 设备存储） | ✅ |
+
+两种行为在同一条 `am start` 命令上加/不加 extra 复现过，不是推测。
+`EXTRA_MIME_TYPES` 用 `application/octet-stream, application/pdf, image/svg+xml, text/plain`。
+
+### 3. 三个会浪费几小时的验证陷阱
+- **`pidof com.android.documentsui` 在这台 ROM 上永远是空的**：`com.android.documentsui` 是个壳，
+  `ACTION_OPEN_DOCUMENT` 实际由 `com.android.filemanager/.selector.view.SelectorHomeActivity` 承接。
+  正确的检查是 `dumpsys activity activities | grep topResumedActivity`。基于 `pidof documentsui`
+  得出的「选择器没弹出来」结论是**假阴性**。
+- **选择器每行的「打开」是按别的应用打开文件，不会把结果回传给你**。要回传必须点该行左侧的
+  勾选框，再点右下角「完成」。
+- **`adb shell` 里不加引号的 `*/*` 会被设备 shell 做 glob 展开**，静默变成 `bin/...`，
+  让 `resolve-activity` 永远返回 "No activity found"。要写成 `-t '*/*'`。
+
+### 4. vivo 的安装拦截（`INSTALL_FAILED_ABORTED: User rejected permissions`）
+不是权限问题，是「安全守护」弹窗没人点。流程：后台跑 `pm install`，等
+`PackageInterceptActivity` 出现 → 勾「已了解应用的风险检测结果」→ 点「继续安装」。
+已固化成 `~/install-apk.sh <apk>`，靠 `uiautomator dump` 找控件而不写死坐标。
+屏幕必须解锁，否则 vivo 直接拒绝。
+
+### 5. `.gitignore` 把五个老应用的补丁一起忽略了
+`filmcraft/` 这种无锚点规则同样匹配 `patches/filmcraft-android/`，所以 filmcraft / lightcraft /
+photocraft / effectcraft / printcraft 的补丁**从来没进过 git**。已改成 `/filmcraft/` 等锚定写法。
+
+### 6. 构建源在哪（踩过）
+- 7 个新应用：`~/artcraft-android/src/<app>/`（rsync 时注意 `--delete` 会删掉 `jniLibs/libmain.so`）
+- 5 个老应用：**`~/artcraft-mobile/<app>/`**，`patches/` → 克隆再构建。
+  `/tmp/rebuild-so.sh` 只认 `~/artcraft-android/src/`，对老应用会报「无源码」。
+
+### 改动落地
+`scripts/fix-saf-java.py` 可幂等地把两个修复打到每个 `MainActivity.java`，已跑过全部 12 个应用。
