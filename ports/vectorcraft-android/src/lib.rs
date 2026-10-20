@@ -9,7 +9,7 @@
 //! | `std::env::args()` (files, `--sample`) | none: the app starts on a blank workbook |
 //! | `config_dir()` from `HOME`/`XDG_CONFIG_HOME` | [`AndroidApp::internal_data_path`] |
 //! | `rfd` file dialogs, `arboard` clipboard | not wired yet: `Services` is left at its default |
-//! | `sys-locale` interface language | English until a language picker is wired |
+//! | Android system locale | forwarded to VectorCraft i18n; the existing language preference can override it |
 //! | `craft-print` printers | none |
 //! | desktop-sized UI (1440×900, hover menus) | [`TouchShell`] enlarges touch targets |
 //!
@@ -60,6 +60,17 @@ fn android_main(app: AndroidApp) {
     if let Some(dir) = &data_dir {
         log::info!("vectorcraft-android: data dir {}", dir.display());
         std::fs::create_dir_all(dir).ok();
+
+        // MainActivity writes the device's preferred locale before native startup. VectorCraft
+        // already ships zh-Hans/zh-Hant and other language catalogs; pass the Android locale into
+        // the same registry used by the desktop UI, rather than hard-coding English on Android.
+        if let Ok(locale) = std::fs::read_to_string(dir.join("ui-locale.txt")) {
+            let locale = locale.trim();
+            if !locale.is_empty() {
+                vectorcraft_ui_egui::i18n::set_system_locales(&[locale]);
+                log::info!("vectorcraft-android: system UI locale {locale}");
+            }
+        }
     }
 
     // The SAF pickers answer asynchronously (Java starts the intent, this side polls a flag), but
