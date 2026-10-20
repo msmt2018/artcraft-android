@@ -53,8 +53,10 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
      */
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+        // GameActivity may start the native render loop from super.onCreate(), so persist the
+        // locale before calling super rather than racing Rust startup.
         writeUiLocale();
+        super.onCreate(savedInstanceState);
     }
 
     private void writeUiLocale() {
