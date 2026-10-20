@@ -15,6 +15,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
 /**
@@ -44,6 +45,33 @@ public class MainActivity extends com.google.androidgamesdk.GameActivity {
     private volatile boolean saveDone = true;
     private volatile boolean hasSaveUri = false;
     private Uri saveUri = null;
+
+    /**
+     * Pass Android's preferred UI language to the native VectorCraft frontend. Android processes
+     * often expose no useful LANG/LC_MESSAGES environment variables, so the Rust locale detector
+     * cannot reliably infer the device language on its own.
+     */
+    @Override
+    protected void onCreate(android.os.Bundle savedInstanceState) {
+        // GameActivity may start the native render loop from super.onCreate(), so persist the
+        // locale before calling super rather than racing Rust startup.
+        writeUiLocale();
+        super.onCreate(savedInstanceState);
+    }
+
+    private void writeUiLocale() {
+        try {
+            String tag = getResources().getConfiguration().getLocales().get(0).toLanguageTag();
+            File localeFile = new File(getFilesDir(), "ui-locale.txt");
+            try (FileOutputStream out = new FileOutputStream(localeFile, false)) {
+                out.write(tag.getBytes(StandardCharsets.UTF_8));
+            }
+            Log.i(TAG, "system UI locale " + tag);
+        } catch (Exception e) {
+            // Native startup falls back to VectorCraft's normal English/system-locale behaviour.
+            Log.w(TAG, "could not persist system UI locale", e);
+        }
+    }
 
     /** ACTION_OPEN_DOCUMENT, any number of files. Results land in the manifest. */
     public void safPickMedia() {

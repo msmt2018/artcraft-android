@@ -9,7 +9,7 @@
 //! | `std::env::args()` (files, `--sample`) | none: the app starts on a blank workbook |
 //! | `config_dir()` from `HOME`/`XDG_CONFIG_HOME` | [`AndroidApp::internal_data_path`] |
 //! | `rfd` file dialogs, `arboard` clipboard | not wired yet: `Services` is left at its default |
-//! | `sys-locale` interface language | English until a language picker is wired |
+//! | Android system locale | forwarded to VectorCraft i18n; the existing language preference can override it |
 //! | `craft-print` printers | none |
 //! | desktop-sized UI (1440×900, hover menus) | [`TouchShell`] enlarges touch targets |
 //!
@@ -33,14 +33,39 @@ use winit::platform::android::activity::AndroidApp;
 /// not a zoom. See STATUS.md § "What is still desktop-shaped".
 const TOUCH_SCALE: f32 = 1.0;
 
-/// System font files that carry CJK, in preference order. egui's default fonts are Latin-only, so
-/// without one of these every Chinese/Japanese/Korean glyph renders as a blank box.
-const CJK_CANDIDATES: &[&str] = &[
-    "/system/fonts/NotoSansCJK-Regular.ttc",
-    "/system/fonts/NotoSansCJKsc-Regular.otf",
-    "/system/fonts/NotoSansSC-Regular.otf",
-    "/system/fonts/DroidSansFallbackFull.ttf",
-    "/system/fonts/DroidSansFallback.ttf",
+/// Android font faces used as last-resort glyph fallbacks. Keep the theme's own fonts first;
+/// Android images vary, so each family lists common system paths in preference order.
+const MULTILINGUAL_FONTS: &[(&str, &[&str])] = &[
+    ("system-cjk", &[
+        "/system/fonts/NotoSansCJK-Regular.ttc",
+        "/system/fonts/NotoSansCJKsc-Regular.otf",
+        "/system/fonts/NotoSansSC-Regular.otf",
+        "/system/fonts/NotoSansJP-Regular.otf",
+        "/system/fonts/NotoSansKR-Regular.otf",
+        "/system/fonts/NotoSansTC-Regular.otf",
+        "/system/fonts/DroidSansFallbackFull.ttf",
+        "/system/fonts/DroidSansFallback.ttf",
+    ]),
+    ("system-symbols", &[
+        "/system/fonts/NotoSansSymbols2-Regular.ttf",
+        "/system/fonts/NotoSansSymbols-Regular-Subsetted.ttf",
+        "/system/fonts/NotoSansSymbols-Regular.ttf",
+    ]),
+    ("system-arabic", &[
+        "/system/fonts/NotoNaskhArabic-Regular.ttf",
+        "/system/fonts/NotoSansArabicUI-Regular.ttf",
+        "/system/fonts/NotoSansArabic-Regular.ttf",
+    ]),
+    ("system-thai", &[
+        "/system/fonts/NotoSansThai-Regular.ttf",
+        "/system/fonts/NotoSansThaiUI-Regular.ttf",
+    ]),
+    ("system-devanagari", &[
+        "/system/fonts/NotoSansDevanagari-Regular.ttf",
+    ]),
+    ("system-hebrew", &[
+        "/system/fonts/NotoSansHebrew-Regular.ttf",
+    ]),
 ];
 
 /// The Android entry point. winit's `android-activity` glue looks this symbol up in the cdylib,
@@ -60,6 +85,17 @@ fn android_main(app: AndroidApp) {
     if let Some(dir) = &data_dir {
         log::info!("vectorcraft-android: data dir {}", dir.display());
         std::fs::create_dir_all(dir).ok();
+
+        // MainActivity writes the device's preferred locale before native startup. VectorCraft
+        // already ships zh-Hans/zh-Hant and other language catalogs; pass the Android locale into
+        // the same registry used by the desktop UI, rather than hard-coding English on Android.
+        if let Ok(locale) = std::fs::read_to_string(dir.join("ui-locale.txt")) {
+            let locale = locale.trim();
+            if !locale.is_empty() {
+                vectorcraft_ui_egui::i18n::set_system_locales(&[locale]);
+                log::info!("vectorcraft-android: system UI locale {locale}");
+            }
+        }
     }
 
     // The SAF pickers answer asynchronously (Java starts the intent, this side polls a flag), but
@@ -234,7 +270,7 @@ fn save_prefs(app: &VectorcraftApp, dir: &std::path::Path) {
 /// Bind a system CJK face as the last fallback of every family. egui applies new definitions on
 /// the next pass, so this is called once, before the first frame.
 fn setup_fonts(ctx: &egui::Context) {
-    let Some((path, bytes)) = CJK_CANDIDATES
+    let Some((path, bytes)) = MULTILINGUAL_FONTS[0].1
         .iter()
         .find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
     else {
@@ -330,32 +366,51 @@ impl eframe::App for TouchShell {
     }
 }
 
-/// Append the system CJK face to whatever families the theme has installed, keeping the theme's
-/// own order (its faces win; the system face only catches glyphs they lack).
+/// Append available Android multilingual faces after the theme's own fonts. This keeps the
+/// theme's glyphs preferred while covering CJK, symbols, Arabic, Thai, Devanagari and Hebrew on
+/// Android images that ship those Noto faces.
 fn append_cjk_fallback(ctx: &egui::Context) {
-    let Some((path, bytes)) = CJK_CANDIDATES
-        .iter()
-        .find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
-    else {
-        return;
-    };
-    ctx.all_styles_mut(|_| {});
     let mut fonts = ctx.fonts(|f| f.definitions().clone());
-    fonts.font_data.insert("system-cjk".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+    let mut loaded = Vec::new();
+
+    for (name, candidates) in MULTILINGUAL_FONTS {
+        let Some((path, bytes)) = candidates
+            .iter()
+            .find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
+        else {
+            continue;
+        };
+        fonts.font_data.insert(
+            (*name).to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        loaded.push((*name, path));
+    }
+
+    if loaded.is_empty() {
+        log::warn!("vectorcraft-android: no multilingual system fonts found; missing glyphs may render as boxes");
+        return;
+    }
+
+    for family in fonts.families.keys().cloned().collect::<Vec<_>>() {
         let list = fonts.families.entry(family).or_default();
-        if !list.iter().any(|n| n == "system-cjk") {
-            list.push("system-cjk".to_owned());
+        for (name, _) in &loaded {
+            if !list.iter().any(|existing| existing.as_str() == *name) {
+                list.push((*name).to_owned());
+            }
         }
     }
-    for family in fonts.families.keys().cloned().collect::<Vec<_>>() {
-        if let egui::FontFamily::Name(_) = family {
-            let list = fonts.families.entry(family).or_default();
-            if !list.iter().any(|n| n == "system-cjk") {
-                list.push("system-cjk".to_owned());
+    // Also ensure the standard families exist if a custom theme omitted them.
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let list = fonts.families.entry(family).or_default();
+        for (name, _) in &loaded {
+            if !list.iter().any(|existing| existing == name) {
+                list.push((*name).to_owned());
             }
         }
     }
     ctx.set_fonts(fonts);
-    log::info!("vectorcraft-android: CJK fallback appended from {path}");
+    for (name, path) in loaded {
+        log::info!("vectorcraft-android: multilingual fallback {name} from {path}");
+    }
 }
