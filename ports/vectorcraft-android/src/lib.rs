@@ -270,7 +270,7 @@ fn save_prefs(app: &VectorcraftApp, dir: &std::path::Path) {
 /// Bind a system CJK face as the last fallback of every family. egui applies new definitions on
 /// the next pass, so this is called once, before the first frame.
 fn setup_fonts(ctx: &egui::Context) {
-    let Some((path, bytes)) = CJK_CANDIDATES
+    let Some((path, bytes)) = MULTILINGUAL_FONTS[0].1
         .iter()
         .find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
     else {
@@ -395,7 +395,7 @@ fn append_cjk_fallback(ctx: &egui::Context) {
     for family in fonts.families.keys().cloned().collect::<Vec<_>>() {
         let list = fonts.families.entry(family).or_default();
         for (name, _) in &loaded {
-            if !list.iter().any(|existing| existing == name) {
+            if !list.iter().any(|existing| existing.as_str() == *name) {
                 list.push((*name).to_owned());
             }
         }
