@@ -18,9 +18,9 @@ automatic/system language selection uses the Android device locale.
 
 ## Font fallback
 
-The native shell appends an installed CJK font after VectorCraft's theme fonts, preserving the
-theme's preferred faces while allowing Chinese, Japanese and Korean glyphs to render. It checks
-common Android Noto CJK and Droid fallback paths. Font availability varies by Android image; when
-none of the candidates exists, the app logs a warning and falls back to the system's normal font
-behaviour. No font binary is vendored in this patch, so there is no additional APK size or font
-license file to maintain.
+The native shell appends installed Android Noto/Droid font faces after VectorCraft's theme fonts,
+preserving the theme's preferred faces. It checks CJK (Simplified/Traditional Chinese, Japanese,
+Korean), symbol, Arabic, Thai, Devanagari and Hebrew candidates. Font availability varies by Android
+image; only faces present on that device are loaded, and the app logs each loaded fallback. This
+uses system font files instead of bundling binary font assets, avoiding duplicate APK payload and
+keeping each system face under its platform's font licensing/attribution.
